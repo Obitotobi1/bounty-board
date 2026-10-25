@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bounty Board</title>
+<style>
+  :root { --bg:#0f1115; --card:#181b22; --text:#e8eaf0; --muted:#98a0b3; --accent:#f5a524; --line:#2a2f3a; --ok:#3ecf8e; --bad:#ff6b6b; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f6f7f9; --card:#ffffff; --text:#1b1e26; --muted:#5c6478; --line:#dde1ea; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; line-height:1.5; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { margin: 8px 0 4px; font-size: 28px; }
+  h2 { margin: 0 0 12px; font-size: 18px; }
+  p.sub { margin: 0 0 20px; color: var(--muted); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  label { display:block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  input { width:100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font-size: 15px; }
+  button { margin-top: 14px; padding: 10px 16px; border: 0; border-radius: 8px; background: var(--accent); color: #1b1e26; font-weight: 600; font-size: 15px; cursor: pointer; }
+  button.small { margin-top: 0; padding: 5px 10px; font-size: 13px; }
+  button.danger { background: var(--bad); color: #fff; }
+  button:disabled { opacity: .5; cursor: wait; }
+  .mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; word-break: break-all; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  td, th { padding: 6px 8px 6px 0; border-top: 1px solid var(--line); vertical-align: top; text-align: left; font-size: 14px; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  table.detail td:first-child { color: var(--muted); width: 110px; }
+  .PAID { color: var(--ok); font-weight: 700; }
+  .OPEN { color: var(--accent); font-weight: 700; }
+  .CANCELLED { color: var(--bad); font-weight: 700; }
+  .history { white-space: pre-wrap; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  #log { max-height: 220px; overflow: auto; }
+  #log div { padding: 4px 0; border-top: 1px solid var(--line); font-size: 13px; word-break: break-word; }
+  #log .err { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Bounty Board <span class="muted">v1.1</span></h1>
+  <p class="sub">Post a bounty for a GitHub issue. Anyone can claim it with a pull request link. GenLayer validators read the live GitHub pages and must agree that the pull request is merged and really fixes the issue. Every claim is kept in the bounty's history, and a bounty stops accepting claims after 3 failed ones.</p>
+
+  <div class="card">
+    <h2>Connection</h2>
+    <div class="muted">Contract (GenLayer Studio)</div>
+    <div class="mono" id="contract"></div>
+    <div class="muted" style="margin-top:10px">Your test account (made in this browser)</div>
+    <div class="mono" id="account">loading...</div>
+    <p class="muted">This is a demo on a test network. The reward is a recorded number, and no real tokens move.</p>
+  </div>
+
+  <div class="card">
+    <h2>All bounties</h2>
+    <button class="small" id="refreshBtn">Refresh list</button>
+    <div class="scroll" id="list"><div class="muted">Loading...</div></div>
+  </div>
+
+  <div class="card">
+    <h2>1. Create a bounty</h2>
+    <label for="repo">Repo (owner/name)</label>
+    <input id="repo" value="Obitotobi1/bounty-board">
+    <label for="issue">Issue number</label>
+    <input id="issue" type="number" min="1" value="1">
+    <label for="reward">Reward</label>
+    <input id="reward" type="number" min="1" value="100">
+    <button id="createBtn">Create bounty</button>
+  </div>
+
+  <div class="card">
+    <h2>2. Claim a bounty</h2>
+    <label for="claimId">Bounty id</label>
+    <input id="claimId" type="number" min="1" value="1">
+    <label for="prUrl">Pull request link (same repo)</label>
+    <input id="prUrl" placeholder="https://github.com/owner/name/pull/2">
+    <button id="claimBtn">Claim with this pull request</button>
+    <p class="muted">A claim can take a few minutes while validators read GitHub and vote.</p>
+  </div>
+
+  <div class="card">
+    <h2>3. Look up a bounty</h2>
+    <label for="lookupId">Bounty id</label>
+    <input id="lookupId" type="number" min="1" value="1">
+    <button id="lookupBtn">Look up</button>
+    <div id="result"></div>
+  </div>
+
+  <div class="card">
+    <h2>Activity</h2>
+    <div id="log"><div class="muted">Nothing yet.</div></div>
+  </div>
+</main>
+
+<script type="module">
+import { createClient, createAccount } from "https://esm.sh/genlayer-js";
+import { studionet } from "https://esm.sh/genlayer-js/chains";
+import { TransactionStatus } from "https://esm.sh/genlayer-js/types";
+
+const CONTRACT = "0x51189bEb2E7d1EeDc649A7c9778e3626668dC898";
+const MAX_FAILED = 3;
+document.getElementById("contract").textContent = CONTRACT;
+
+const $ = (id) => document.getElementById(id);
+
+function log(message, isError) {
+  const box = $("log");
+  if (box.firstElementChild && box.firstElementChild.classList.contains("muted")) box.innerHTML = "";
+  const row = document.createElement("div");
+  if (isError) row.className = "err";
+  row.textContent = new Date().toLocaleTimeString() + "  " + message;
+  box.prepend(row);
+}
+
+function getKey() {
+  let key = null;
+  try { key = localStorage.getItem("bounty_board_key"); } catch (e) { key = null; }
+  if (!key) {
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    key = "0x" + Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+    try { localStorage.setItem("bounty_board_key", key); } catch (e) {}
+  }
+  return key;
+}
+
+const account = createAccount(getKey());
+const client = createClient({ chain: studionet, account });
+$("account").textContent = account.address;
+
+async function read(functionName, args = []) {
+  return await client.readContract({ address: CONTRACT, functionName, args });
+}
+
+async function readBounty(id) {
+  const raw = await read("get_bounty", [Number(id)]);
+  return typeof raw === "string" ? JSON.parse(raw) : raw;
+}
+
+async function write(functionName, args) {
+  const hash = await client.writeContract({ address: CONTRACT, functionName, args, value: 0n });
+  log("Sent " + functionName + ". Waiting for validators...");
+  await client.waitForTransactionReceipt({
+    hash,
+    status: TransactionStatus.ACCEPTED,
+    retries: 120,
+    interval: 5000,
+  });
+  log(functionName + " finished consensus.");
+  return hash;
+}
+
+function busy(button, isBusy) { button.disabled = isBusy; }
+
+function cell(tag, text, className) {
+  const el = document.createElement(tag);
+  el.textContent = text;
+  if (className) el.className = className;
+  return el;
+}
+
+function lastHistoryLine(history) {
+  const lines = String(history || "").split("\n").filter((l) => l.length > 0);
+  return lines.length ? lines[lines.length - 1] : "";
+}
+
+async function refreshList() {
+  const box = $("list");
+  box.textContent = "Loading...";
+  try {
+    const total = Number(await read("get_total_bounties"));
+    if (total === 0) { box.textContent = "No bounties yet."; return; }
+    const ids = [];
+    for (let i = total; i >= 1 && i > total - 20; i--) ids.push(i);
+    const items = await Promise.all(ids.map((i) => readBounty(i).catch(() => null)));
+    const table = document.createElement("table");
+    const head = document.createElement("tr");
+    ["Id", "Issue", "Reward", "Status", "Failed claims", ""].forEach((h) => head.append(cell("th", h)));
+    table.append(head);
+    for (const b of items) {
+      if (!b) continue;
+      const tr = document.createElement("tr");
+      tr.append(cell("td", "#" + b.id));
+      tr.append(cell("td", b.repo + " #" + b.issue));
+      tr.append(cell("td", String(b.reward)));
+      tr.append(cell("td", b.status, b.status));
+      tr.append(cell("td", b.attempts + " of " + MAX_FAILED));
+      const td = document.createElement("td");
+      const view = document.createElement("button");
+      view.className = "small";
+      view.textContent = "View";
+      view.onclick = () => { $("lookupId").value = b.id; $("claimId").value = b.id; lookup(b.id); };
+      td.append(view);
+      tr.append(td);
+      table.append(tr);
+    }
+    box.textContent = "";
+    box.append(table);
+    if (total > 20) {
+      const more = cell("div", "Showing the newest 20 of " + total + " bounties.", "muted");
+      box.append(more);
+    }
+  } catch (e) {
+    box.textContent = "Could not load the list.";
+    log("List failed: " + (e && e.message ? e.message : e), true);
+  }
+}
+
+async function lookup(id) {
+  const result = $("result");
+  result.textContent = "";
+  try {
+    const b = await readBounty(id);
+    const table = document.createElement("table");
+    table.className = "detail";
+    const rows = [
+      ["Status", b.status, b.status],
+      ["Repo", b.repo],
+      ["Issue", "#" + b.issue],
+      ["Reward", String(b.reward)],
+      ["Winner", b.winner || "-"],
+      ["Reason", b.reason || "-"],
+      ["Failed claims", b.attempts + " of " + MAX_FAILED + (b.attempts >= MAX_FAILED ? " (no more claims accepted)" : "")],
+    ];
+    for (const [k, v, cls] of rows) {
+      const tr = document.createElement("tr");
+      tr.append(cell("td", k), cell("td", v, cls));
+      table.append(tr);
+    }
+    const histRow = document.createElement("tr");
+    histRow.append(cell("td", "History"), cell("td", b.history ? b.history.trim() : "No claims yet.", "history"));
+    table.append(histRow);
+    result.append(table);
+
+    if (b.status === "OPEN") {
+      const cancelBtn = document.createElement("button");
+      cancelBtn.className = "danger";
+      cancelBtn.textContent = "Cancel this bounty";
+      cancelBtn.onclick = () => cancelBounty(b.id, cancelBtn);
+      result.append(cancelBtn);
+      result.append(cell("p", "Only the account that created a bounty can cancel it.", "muted"));
+    }
+  } catch (e) {
+    log("Lookup failed: " + (e && e.message ? e.message : e), true);
+    result.textContent = "Bounty not found.";
+  }
+}
+
+async function cancelBounty(id, btn) {
+  busy(btn, true);
+  try {
+    await write("cancel", [Number(id)]);
+    const b = await readBounty(id);
+    if (b.status === "CANCELLED") log("Bounty #" + id + " was cancelled.");
+    else log("Cancel was refused. Only the account that created bounty #" + id + " can cancel it.", true);
+    await lookup(id);
+    await refreshList();
+  } catch (e) {
+    log("Cancel failed: " + (e && e.message ? e.message : e), true);
+  }
+  busy(btn, false);
+}
+
+$("createBtn").onclick = async () => {
+  const btn = $("createBtn");
+  busy(btn, true);
+  try {
+    await write("create_bounty", [$("repo").value.trim(), Number($("issue").value), Number($("reward").value)]);
+    const total = Number(await read("get_total_bounties"));
+    log("Bounty created. Its id is " + total + ".");
+    $("claimId").value = total; $("lookupId").value = total;
+    await lookup(total);
+    await refreshList();
+  } catch (e) {
+    log("Create failed: " + (e && e.message ? e.message : e), true);
+  }
+  busy(btn, false);
+};
+
+$("claimBtn").onclick = async () => {
+  const btn = $("claimBtn");
+  busy(btn, true);
+  const id = Number($("claimId").value);
+  try {
+    await write("claim", [id, $("prUrl").value.trim()]);
+    const b = await readBounty(id);
+    const last = lastHistoryLine(b.history);
+    log("Claim result for bounty #" + id + ": " + (last || "no new history. The claim may have been refused, for example after " + MAX_FAILED + " failed claims."));
+    $("lookupId").value = id;
+    await lookup(id);
+    await refreshList();
+  } catch (e) {
+    log("Claim failed: " + (e && e.message ? e.message : e), true);
+  }
+  busy(btn, false);
+};
+
+$("lookupBtn").onclick = () => lookup($("lookupId").value);
+$("refreshBtn").onclick = () => refreshList();
+
+log("Ready. Account " + account.address);
+refreshList();
+</script>
+</body>
+</html>
