@@ -5,6 +5,7 @@ import json
 
 NAME_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_."
 MAX_PAGE_TEXT = 3000
+MAX_FAILED_CLAIMS = 3
 
 REASONS = {
     "MERGED_AND_FIXES": "The pull request is merged and fixes the issue.",
@@ -39,6 +40,8 @@ class BountyBoard(gl.Contract):
     posters: TreeMap[u256, Address]
     winners: TreeMap[u256, str]
     reasons: TreeMap[u256, str]
+    attempts: TreeMap[u256, u256]
+    histories: TreeMap[u256, str]
 
     def __init__(self):
         self.next_id = u256(1)
@@ -61,6 +64,8 @@ class BountyBoard(gl.Contract):
         self.posters[bounty_id] = gl.message.sender_address
         self.winners[bounty_id] = ""
         self.reasons[bounty_id] = ""
+        self.attempts[bounty_id] = u256(0)
+        self.histories[bounty_id] = ""
         self.next_id = u256(int(bounty_id) + 1)
         return int(bounty_id)
 
@@ -72,6 +77,8 @@ class BountyBoard(gl.Contract):
             raise Exception("Bounty not found")
         if status != "OPEN":
             raise Exception("Bounty is not open")
+        if int(self.attempts[bid]) >= MAX_FAILED_CLAIMS:
+            raise Exception("Too many failed claims for this bounty")
 
         repo = self.repos[bid]
         issue_no = int(self.issues[bid])
@@ -157,10 +164,14 @@ class BountyBoard(gl.Contract):
             winner = ""
             code = "UNCLEAR"
 
+        line = "PR #" + number + " - " + verdict + ": " + REASONS[code]
+        self.histories[bid] = self.histories[bid] + line + "\n"
         self.reasons[bid] = REASONS[code]
         if verdict == "APPROVED":
             self.statuses[bid] = "PAID"
             self.winners[bid] = winner
+        else:
+            self.attempts[bid] = u256(int(self.attempts[bid]) + 1)
 
         return verdict + ": " + REASONS[code]
 
@@ -222,3 +233,38 @@ class BountyBoard(gl.Contract):
     @gl.public.view
     def get_total_bounties(self) -> int:
         return int(self.next_id) - 1
+
+    @gl.public.view
+    def get_attempts(self, bounty_id: int) -> int:
+        attempts = self.attempts.get(u256(bounty_id))
+        if attempts is None:
+            raise Exception("Bounty not found")
+        return int(attempts)
+
+    @gl.public.view
+    def get_history(self, bounty_id: int) -> str:
+        history = self.histories.get(u256(bounty_id))
+        if history is None:
+            raise Exception("Bounty not found")
+        return history
+
+    @gl.public.view
+    def get_bounty(self, bounty_id: int) -> str:
+        bid = u256(bounty_id)
+        status = self.statuses.get(bid)
+        if status is None:
+            raise Exception("Bounty not found")
+        return json.dumps(
+            {
+                "id": bounty_id,
+                "repo": self.repos[bid],
+                "issue": int(self.issues[bid]),
+                "reward": int(self.rewards[bid]),
+                "status": status,
+                "winner": self.winners[bid],
+                "reason": self.reasons[bid],
+                "attempts": int(self.attempts[bid]),
+                "history": self.histories[bid],
+            },
+            sort_keys=True,
+        )
