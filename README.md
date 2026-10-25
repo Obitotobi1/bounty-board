@@ -45,3 +45,10 @@ Contract address: `0xdb3448A3c6b72EC260eFB48B603470183508DFFb`
 - Version 1 records the reward as a number. It does not move real tokens yet.
 - It reads GitHub pages as text, so unusual page layouts may be judged less reliably.
 - LLM validators can disagree in unclear cases, and those claims are rejected.
+
+
+## Live website
+
+https://obitotobi1.github.io/bounty-board/
+
+The page creates bounties, claims them and shows results by calling the deployed contract on GenLayer Studio. It makes a test account inside your browser, so no wallet is needed.
